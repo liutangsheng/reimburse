@@ -962,13 +962,24 @@ def build_reimbursement_pdf(
 
     # Parse order info and invoice info with logs
     print(f"\n[1/4] 正在提取订单与行程信息 (餐饮订单 {len(order_images)} 张, 交通行程单 {len(traffic_trip_pdfs)} 份)...")
-    orders = []
-    for p in order_images:
-        info = parse_order_image(p)
+    orders = [parse_order_image(p) for p in order_images]
+
+    def _order_sort_key(o: dict) -> tuple[int, datetime, str]:
+        if o["datetime"] is not None:
+            return (0, o["datetime"], o["path"].name)
+        if o["date"]:
+            with contextlib.suppress(ValueError):
+                return (0, datetime.strptime(o["date"], "%Y-%m-%d"), o["path"].name)
+        return (1, datetime.max, o["path"].name)
+
+    orders.sort(key=_order_sort_key)
+    order_images = [o["path"] for o in orders]
+
+    for info in orders:
+        p = info["path"]
         dt_str = info["datetime"].strftime("%Y-%m-%d %H:%M:%S") if info["datetime"] else (info["date"] or "未识别")
         amt_str = f"¥{info['amount']:.2f}" if info["amount"] is not None else "未识别"
         print(f"  - 订单 {p.name}: 下单时间={dt_str}, 订单金额={amt_str}")
-        orders.append(info)
 
     traffic_trips = []
     for p in traffic_trip_pdfs:
