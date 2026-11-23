@@ -1,0 +1,26 @@
+# Python 环境与缓存
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 打包构建产物
+build/
+dist/
+reimburse_pack/
+*.spec
+
+# 个人报销材料与生成的 PDF（避免隐私泄露）
+东百+*/
+*.pdf
+*.docx
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# 系统与编辑器文件
+.DS_Store
+.vscode/
+.idea/
