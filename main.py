@@ -11,8 +11,9 @@ import sys
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageChops
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
@@ -41,16 +42,18 @@ def register_chinese_font() -> str:
     ]
     for name, path, idx in candidates:
         if Path(path).exists():
-            kwargs = {"subfontIndex": idx} if idx is not None else {}
-            pdfmetrics.registerFont(TTFont(name, path, **kwargs))
+            if idx is not None:
+                pdfmetrics.registerFont(TTFont(name, path, subfontIndex=idx))
+            else:
+                pdfmetrics.registerFont(TTFont(name, path))
             return name
     return "Helvetica"
 
 
-def _subprocess_kwargs() -> dict:
+def _subprocess_kwargs() -> dict[str, Any]:
     """Suppress extra console windows when invoking subprocesses on Windows."""
     if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
     return {}
 
 
@@ -285,7 +288,7 @@ def _find_yen_amount(text: str) -> float | None:
     )
     if not m:
         return None
-    raw = m.group(1) or m.group(2)
+    raw = m.group(1) or m.group(2) or ""
     norm = re.sub(r"\s*[.,]\s*", ".", raw)
     try:
         return float(norm)
@@ -300,7 +303,7 @@ def _parse_invoice_text(
     is_image: bool = False,
     has_chi_sim: bool = True,
     default_purpose: str = "餐费",
-) -> dict:
+) -> dict[str, Any]:
     """Parse invoice fields from extracted PDF text or image OCR text."""
     # Prefer the ¥ amount on the line with Chinese uppercase total (e.g. 肆拾叁圆整 ¥43.00 or 56.20¥)
     raw_amount = None
@@ -312,12 +315,12 @@ def _parse_invoice_text(
                 break
 
     if raw_amount is None:
-        all_amounts = []
+        all_amounts: list[float] = []
         for m in re.finditer(
             r"[¥￥]\s*(\d+(?:\s*[.,]\s*\d{1,2})?)|(\d+(?:\s*[.,]\s*\d{1,2})?)\s*[¥￥]",
             full_text,
         ):
-            raw = m.group(1) or m.group(2)
+            raw = m.group(1) or m.group(2) or ""
             norm = re.sub(r"\s*[.,]\s*", ".", raw)
             with contextlib.suppress(ValueError):
                 all_amounts.append(float(norm))
@@ -518,8 +521,9 @@ def parse_invoice_pdf(pdf_path: Path, default_purpose: str = "餐费") -> dict:
                     ocr_parts.append(t)
             if not ocr_parts:
                 with contextlib.suppress(Exception):
-                    import pypdfium2 as pdfium
+                    import importlib
 
+                    pdfium = importlib.import_module("pypdfium2")
                     pdf_doc = pdfium.PdfDocument(str(pdf_path))
                     try:
                         pil_img = pdf_doc[page_idx].render(scale=2.5).to_pil()
@@ -647,8 +651,11 @@ def format_date_range(dates: list[str]) -> str:
     if not dates:
         return ""
     sorted_dates = sorted(set(dates))
-    fmt = lambda d: f"{int(d[5:7])}.{int(d[8:10])}"
-    return f"{'/'.join(fmt(d) for d in sorted_dates)} 号加班"
+
+    def _fmt(d: str) -> str:
+        return f"{int(d[5:7])}.{int(d[8:10])}"
+
+    return f"{'/'.join(_fmt(d) for d in sorted_dates)} 号加班"
 
 
 def amount_to_chinese_units(amount: float) -> list[tuple[str, str]]:
@@ -676,19 +683,26 @@ def amount_to_chinese_units(amount: float) -> list[tuple[str, str]]:
     return result
 
 
+def _signature_png_buffer(sig_path: Path) -> io.BytesIO:
+    """Load signature image and make near-white background transparent, returning PNG buffer."""
+    with Image.open(sig_path) as raw_img:
+        img = raw_img.convert("RGBA")
+        r_ch, g_ch, b_ch, a_ch = img.split()
+        lut = [0 if i > 225 else 255 for i in range(256)]
+        non_white = ImageChops.lighter(
+            ImageChops.lighter(r_ch.point(lut), g_ch.point(lut)),
+            b_ch.point(lut),
+        )
+        img.putalpha(ImageChops.darker(a_ch, non_white))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return buf
+
+
 def load_signature_transparent(sig_path: Path) -> ImageReader:
     """Load signature image and make near-white background transparent."""
-    img = Image.open(sig_path).convert("RGBA")
-    raw = img.get_flattened_data() if hasattr(img, "get_flattened_data") else img.getdata()
-    new_pixels = [
-        (r, g, b, 0) if (r > 225 and g > 225 and b > 225) else (r, g, b, a)
-        for (r, g, b, a) in raw
-    ]
-    img.putdata(new_pixels)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return ImageReader(buf)
+    return ImageReader(_signature_png_buffer(sig_path))
 
 
 def draw_circled_x(c: canvas.Canvas, cx: float, cy: float, radius: float = 4.2) -> None:
@@ -793,7 +807,8 @@ def draw_reimbursement_page(
     c.line(r7_x2, table_bottom, r7_x2, table_bottom + row_h)
 
     # Fill table text
-    mid_y = lambda r: table_top - (r + 0.5) * row_h
+    def mid_y(r: int | float) -> float:
+        return table_top - (r + 0.5) * row_h
 
     draw_centered_text(c, (col_x[0] + col_x[1]) / 2, mid_y(0), "用      途", font_name, 10)
     draw_centered_text(c, (col_x[1] + col_x[2]) / 2, mid_y(0), "金额（元）", font_name, 10)
@@ -958,8 +973,9 @@ def _set_table_borders(table) -> None:
 
 def _render_pdf_pages_to_pngs(pdf_path: Path, scale: float = 2.5) -> list[io.BytesIO]:
     """Render each page of a PDF file into an in-memory PNG buffer via pypdfium2."""
-    import pypdfium2 as pdfium
+    import importlib
 
+    pdfium = importlib.import_module("pypdfium2")
     buffers: list[io.BytesIO] = []
     pdf = pdfium.PdfDocument(str(pdf_path))
     try:
@@ -1115,15 +1131,7 @@ def export_reimbursement_docx(
     _set_cell_font(r_foot, size_pt=10)
 
     if sig_path and sig_path.exists():
-        sig_img = Image.open(sig_path).convert("RGBA")
-        raw = sig_img.get_flattened_data() if hasattr(sig_img, "get_flattened_data") else sig_img.getdata()
-        sig_img.putdata([
-            (r, g, b, 0) if (r > 225 and g > 225 and b > 225) else (r, g, b, a)
-            for (r, g, b, a) in raw
-        ])
-        sig_buf = io.BytesIO()
-        sig_img.save(sig_buf, format="PNG")
-        sig_buf.seek(0)
+        sig_buf = _signature_png_buffer(sig_path)
         p_foot.add_run().add_picture(sig_buf, width=Pt(56))
 
     # 2. 订单截图（每页最多 3 张横向排列）
@@ -1429,7 +1437,8 @@ def _check_category_compliance(
         tag = "通过" if is_valid else "不合规"
         print(f"  [{tag}] {cat_name}订单 {idx} ({name}): 时间 {dt.strftime('%Y-%m-%d %H:%M:%S')} | 金额 {amt_str} | {', '.join(status_parts)}")
         if is_valid:
-            valid_dates.append(o["date"])
+            if o["date"]:
+                valid_dates.append(o["date"])
             if amt is not None:
                 valid_order_amounts.append(amt)
 
