@@ -278,9 +278,9 @@ def _extract_delivery_fee(full_text: str) -> float:
 
 
 def _find_yen_amount(text: str) -> float | None:
-    """Match either '¥56.20', '56.20¥', or OCR variants like '¥43, 00' / '¥42. 57'."""
+    """Match either '¥56.20', '56.20¥', or OCR variants like '¥43, 00' / 'Y31. 56'."""
     m = re.search(
-        r"[¥￥]\s*(-?\d+(?:\s*[.,]\s*\d{1,2})?)|(-?\d+(?:\s*[.,]\s*\d{1,2})?)\s*[¥￥]",
+        r"[¥￥Y]\s*(-?\d+(?:\s*[.,]\s*\d{1,2})?)|(-?\d+(?:\s*[.,]\s*\d{1,2})?)\s*[¥￥]",
         text,
     )
     if not m:
@@ -414,18 +414,61 @@ def _ocr_invoice_pil(im: Image.Image, work_dir: Path | None = None) -> tuple[str
     return "\n".join(texts), has_chi
 
 
+def _ocr_invoice_denoised(im: Image.Image, work_dir: Path | None = None) -> str:
+    """Denoise and normalize uneven lighting / moire screen photos before OCR."""
+    from PIL import ImageChops, ImageFilter, ImageOps
+
+    gray = _to_grayscale_on_white(im)
+    scale = 2 if gray.width < 2000 else 1
+    if scale > 1:
+        gray = gray.resize((gray.width * scale, gray.height * scale), Image.Resampling.LANCZOS)
+    denoised = gray.filter(ImageFilter.MedianFilter(size=3))
+    bg = denoised.filter(ImageFilter.GaussianBlur(radius=25))
+    diff = ImageChops.subtract(bg, denoised)
+    norm = ImageOps.invert(ImageOps.autocontrast(diff, cutoff=1))
+    bw = norm.point(lambda x: 0 if x < 185 else 255)
+
+    texts = []
+    if _has_tesseract_chi_sim():
+        texts.append(_ocr_image(bw, work_dir=work_dir, lang="chi_sim+eng"))
+        texts.append(_ocr_image(bw, psm=6, work_dir=work_dir, lang="chi_sim+eng"))
+    texts.append(_ocr_image(bw, work_dir=work_dir, lang="eng"))
+    return "\n".join(texts)
+
+
 def parse_invoice_image(img_path: Path, default_purpose: str = "餐费") -> dict:
     """Extract total amount, delivery fee, seller, date, and category from an invoice image."""
     with Image.open(img_path) as im:
         full_text, has_chi = _ocr_invoice_pil(im, work_dir=img_path.parent)
-    return _parse_invoice_text(
-        full_text,
-        img_path,
-        pages=1,
-        is_image=True,
-        has_chi_sim=has_chi,
-        default_purpose=default_purpose,
-    )
+        res = _parse_invoice_text(
+            full_text,
+            img_path,
+            pages=1,
+            is_image=True,
+            has_chi_sim=has_chi,
+            default_purpose=default_purpose,
+        )
+        # Fallback for screen-photo / uneven-lighting invoices if key fields were missed
+        if res["date"] is None or res["raw_amount"] is None or not res["is_guangzhou"]:
+            denoised_text = _ocr_invoice_denoised(im, work_dir=img_path.parent)
+            res2 = _parse_invoice_text(
+                denoised_text,
+                img_path,
+                pages=1,
+                is_image=True,
+                has_chi_sim=has_chi,
+                default_purpose=default_purpose,
+            )
+            if res2["date"] is not None or res2["raw_amount"] is not None:
+                return {
+                    **res2,
+                    "raw_amount": res2["raw_amount"] if res2["raw_amount"] is not None else res["raw_amount"],
+                    "amount": res2["amount"] if res2["amount"] is not None else res["amount"],
+                    "date": res2["date"] or res["date"],
+                    "is_guangzhou": res2["is_guangzhou"] or res["is_guangzhou"],
+                    "is_catering": res2["is_catering"] or res["is_catering"],
+                }
+    return res
 
 
 def _aggregate_invoice_parts(
