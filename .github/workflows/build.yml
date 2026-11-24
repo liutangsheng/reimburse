@@ -1,0 +1,132 @@
+name: Build Windows & macOS Packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Prepare portable Tesseract for Windows
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "tess_build"
+          New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2408-x64.msi" -OutFile "$tmp\7z.msi"
+          msiexec /a "$tmp\7z.msi" /qn TARGETDIR="$tmp\7z_ext" | Out-Null
+          Start-Sleep -Seconds 3
+          $sevenZ = "$tmp\7z_ext\Files\7-Zip\7z.exe"
+          $setupExe = "$tmp\tesseract-setup.exe"
+          Invoke-WebRequest -Uri "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe" -OutFile $setupExe
+          $extDir = "$tmp\tess_raw"
+          & $sevenZ x $setupExe "-o$extDir" -y | Out-Null
+
+          $vendorTess = "vendor\tesseract"
+          $vendorTessData = "$vendorTess\tessdata"
+          New-Item -ItemType Directory -Force -Path $vendorTessData | Out-Null
+          Copy-Item "$extDir\tesseract.exe" $vendorTess -Force
+          Copy-Item "$extDir\*.dll" $vendorTess -Force
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata" -OutFile "$vendorTessData\eng.traineddata"
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata" -OutFile "$vendorTessData\chi_sim.traineddata"
+
+      - name: Build Windows portable package
+        run: python build_windows.py
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: dist/费用报销单生成工具_Windows绿色版.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Prepare portable Tesseract for macOS
+        run: |
+          brew install tesseract dylibbundler
+          mkdir -p vendor/tesseract/tessdata vendor/tesseract/libs
+          cp "$(which tesseract)" vendor/tesseract/tesseract
+          chmod +x vendor/tesseract/tesseract
+          dylibbundler -od -b -x vendor/tesseract/tesseract -d vendor/tesseract/libs -p @executable_path/libs
+          curl -fsSL "https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata" -o vendor/tesseract/tessdata/eng.traineddata
+          curl -fsSL "https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata" -o vendor/tesseract/tessdata/chi_sim.traineddata
+
+      - name: Build macOS app bundle
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed \
+            --name "费用报销单生成工具" \
+            --add-data "vendor/tesseract:tesseract" \
+            --exclude-module tkinter \
+            --exclude-module matplotlib \
+            --exclude-module numpy \
+            --exclude-module pandas \
+            --exclude-module cv2 \
+            --exclude-module paddle \
+            --exclude-module onnxruntime \
+            app.py
+          ditto -c -k --keepParent "dist/费用报销单生成工具.app" "dist/费用报销单生成工具_macOS版.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: dist/费用报销单生成工具_macOS版.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-portable
+          path: artifacts
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-app
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/费用报销单生成工具_Windows绿色版.zip
+            artifacts/费用报销单生成工具_macOS版.zip
