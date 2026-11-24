@@ -8,8 +8,10 @@ __pycache__/
 # 打包构建产物
 build/
 dist/
+vendor/
 reimburse_pack/
 *.spec
+*.zip
 
 # 个人报销材料与生成的 PDF（避免隐私泄露）
 东百+*/
