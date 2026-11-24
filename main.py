@@ -428,38 +428,118 @@ def parse_invoice_image(img_path: Path, default_purpose: str = "餐费") -> dict
     )
 
 
-def parse_invoice_pdf(pdf_path: Path, default_purpose: str = "餐费") -> dict:
-    """Extract total amount, delivery fee, seller, date, and category from an invoice PDF."""
-    reader = PdfReader(str(pdf_path))
-    full_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+def _aggregate_invoice_parts(
+    parts: list[dict],
+    pdf_path: Path,
+    pages: int,
+    default_purpose: str,
+) -> dict:
+    """Aggregate parsed invoice results from multiple pages/invoices in one PDF."""
+    if not parts:
+        return {
+            "path": pdf_path,
+            "raw_amount": None,
+            "delivery_fee": 0.0,
+            "amount": None,
+            "date": None,
+            "is_guangzhou": False,
+            "is_catering": False,
+            "purpose": default_purpose,
+            "pages": pages,
+            "sub_count": 0,
+        }
+    if len(parts) == 1:
+        parts[0]["pages"] = pages
+        parts[0]["sub_count"] = 1
+        return parts[0]
 
-    if not full_text.strip():
-        # Fallback for scanned image-only PDFs
-        ocr_parts = []
-        has_chi = _has_tesseract_chi_sim()
-        for page in reader.pages:
+    with_amt = [p for p in parts if p["raw_amount"] is not None]
+    active = with_amt if with_amt else parts
+    raw_amount = round(sum(p["raw_amount"] for p in with_amt), 2) if with_amt else None
+    delivery_fee = round(sum(p["delivery_fee"] for p in active), 2)
+    eff_vals = [p["amount"] for p in active if p["amount"] is not None]
+    effective_amount = round(sum(eff_vals), 2) if eff_vals else None
+
+    return {
+        "path": pdf_path,
+        "raw_amount": raw_amount,
+        "delivery_fee": delivery_fee,
+        "amount": effective_amount,
+        "date": next((p["date"] for p in active if p["date"]), None),
+        "is_guangzhou": all(p["is_guangzhou"] for p in active),
+        "is_catering": all(p["is_catering"] for p in active),
+        "purpose": active[0]["purpose"],
+        "pages": pages,
+        "sub_count": len(active),
+    }
+
+
+def parse_invoice_pdf(pdf_path: Path, default_purpose: str = "餐费") -> dict:
+    """Extract and sum amounts, delivery fees, and metadata from a single- or multi-invoice PDF."""
+    reader = PdfReader(str(pdf_path))
+    parts: list[dict] = []
+
+    for page_idx, page in enumerate(reader.pages):
+        page_text = page.extract_text() or ""
+        if page_text.strip():
+            # If multiple invoices appear on the same PDF page, split by 发票号码
+            if len(re.findall(r"发票号码", page_text)) >= 2:
+                chunks = re.split(r"(?=发票号码)", page_text)
+                for chunk in chunks:
+                    if chunk.strip():
+                        parts.append(
+                            _parse_invoice_text(
+                                chunk,
+                                pdf_path,
+                                pages=1,
+                                is_image=False,
+                                has_chi_sim=True,
+                                default_purpose=default_purpose,
+                            )
+                        )
+            else:
+                parts.append(
+                    _parse_invoice_text(
+                        page_text,
+                        pdf_path,
+                        pages=1,
+                        is_image=False,
+                        has_chi_sim=True,
+                        default_purpose=default_purpose,
+                    )
+                )
+        else:
+            # Fallback for scanned image-only PDF page
+            ocr_parts: list[str] = []
+            has_chi = _has_tesseract_chi_sim()
             for img_file in getattr(page, "images", []):
                 with Image.open(io.BytesIO(img_file.data)) as im:
                     t, has_chi = _ocr_invoice_pil(im, work_dir=pdf_path.parent)
                     ocr_parts.append(t)
-        if ocr_parts:
-            return _parse_invoice_text(
-                "\n".join(ocr_parts),
-                pdf_path,
-                pages=len(reader.pages),
-                is_image=True,
-                has_chi_sim=has_chi,
-                default_purpose=default_purpose,
-            )
+            if not ocr_parts:
+                with contextlib.suppress(Exception):
+                    import pypdfium2 as pdfium
 
-    return _parse_invoice_text(
-        full_text,
-        pdf_path,
-        pages=len(reader.pages),
-        is_image=False,
-        has_chi_sim=True,
-        default_purpose=default_purpose,
-    )
+                    pdf_doc = pdfium.PdfDocument(str(pdf_path))
+                    try:
+                        pil_img = pdf_doc[page_idx].render(scale=2.5).to_pil()
+                        t, has_chi = _ocr_invoice_pil(pil_img, work_dir=pdf_path.parent)
+                        ocr_parts.append(t)
+                    finally:
+                        pdf_doc.close()
+            if ocr_parts:
+                parts.append(
+                    _parse_invoice_text(
+                        "\n".join(ocr_parts),
+                        pdf_path,
+                        pages=1,
+                        is_image=True,
+                        has_chi_sim=has_chi,
+                        default_purpose=default_purpose,
+                    )
+                )
+
+    return _aggregate_invoice_parts(parts, pdf_path, len(reader.pages), default_purpose)
 
 
 def parse_invoice_file(inv_path: Path, default_purpose: str = "餐费") -> dict:
@@ -563,18 +643,12 @@ def classify_traffic_pdfs(traffic_dir: Path) -> tuple[list[Path], list[Path]]:
 
 
 def format_date_range(dates: list[str]) -> str:
-    """Format sorted unique YYYY-MM-DD dates into 'MM.DD 号加班', 'MM.DD-MM.DD 号加班' (consecutive), or 'MM.DD、MM.DD 号加班'."""
+    """Format sorted unique YYYY-MM-DD dates into 'MM.DD 号加班' or 'MM.DD/MM.DD 号加班'."""
     if not dates:
         return ""
     sorted_dates = sorted(set(dates))
     fmt = lambda d: f"{int(d[5:7])}.{int(d[8:10])}"
-    if len(sorted_dates) == 1:
-        return f"{fmt(sorted_dates[0])} 号加班"
-    parsed = [datetime.strptime(d, "%Y-%m-%d").date() for d in sorted_dates]
-    is_consecutive = all((b - a).days == 1 for a, b in zip(parsed, parsed[1:]))
-    if is_consecutive:
-        return f"{fmt(sorted_dates[0])}-{fmt(sorted_dates[-1])} 号加班"
-    return f"{'、'.join(fmt(d) for d in sorted_dates)} 号加班"
+    return f"{'/'.join(fmt(d) for d in sorted_dates)} 号加班"
 
 
 def amount_to_chinese_units(amount: float) -> list[tuple[str, str]]:
@@ -1616,7 +1690,8 @@ def build_reimbursement_pdf(
             info = parse_invoice_file(p, default_purpose=cat_name)
             raw_str = f"¥{info['raw_amount']:.2f}" if info["raw_amount"] is not None else "未识别"
             fee_str = f", 配送费=¥{info['delivery_fee']:.2f}" if info["delivery_fee"] > 0 else ""
-            print(f"  - [{cat_name}] {p.name}: 原价税合计={raw_str}{fee_str}, 开票日期={info['date'] or '未识别'}")
+            sub_str = f", 含{info['sub_count']}张" if info.get("sub_count", 1) > 1 else ""
+            print(f"  - [{cat_name}] {p.name}: 原价税合计={raw_str}{fee_str}{sub_str}, 开票日期={info['date'] or '未识别'}")
             cat_res["invoices"].append(info)
 
     now = datetime.now()
