@@ -1,13 +1,18 @@
 # 费用报销单自动生成工具
 
-## 一、Windows 绿色版使用方式（推荐，免安装环境）
+[![Release](https://img.shields.io/github/v/release/liutangsheng/reimburse)](https://github.com/liutangsheng/reimburse/releases/latest)
+[![Build](https://github.com/liutangsheng/reimburse/actions/workflows/build.yml/badge.svg)](https://github.com/liutangsheng/reimburse/actions/workflows/build.yml)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)](https://github.com/liutangsheng/reimburse/releases/latest)
+[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
 
-无需安装 Python 或 Tesseract，直接解压即用：
+## 一、免安装打包版使用方式（推荐）
 
-1. 解压 `费用报销单生成工具_Windows绿色版.zip` 到任意文件夹。
-2. 双击运行目录内的 **`费用报销单生成工具.exe`**。
+无需安装 Python 或 Tesseract，直接从 [Releases 页面](https://github.com/liutangsheng/reimburse/releases/latest) 下载对应系统的压缩包解压即用：
+
+1. **Windows**：解压 `费用报销单生成工具_Windows绿色版.zip` 到任意文件夹，双击 **`费用报销单生成工具.exe`**。
+2. **macOS**：解压 `费用报销单生成工具_macOS版.zip`，双击 **`费用报销单生成工具.app`**（首次打开若提示未签名，右键 →「打开」即可）。
 3. 浏览器会自动打开操作页面，点击「选择文件夹」选中报销材料目录，点击「开始生成报销单 PDF」即可。
-4. 使用完毕后，直接关闭弹出的黑色终端窗口即可退出程序。
+4. 使用完毕后，直接关闭终端窗口（或退出应用）即可结束。
 
 > 如需自行重新打包 Windows 绿色版，请确保 `vendor/tesseract/` 下包含 `tesseract.exe`、`*.dll` 及 `tessdata/eng.traineddata`、`tessdata/chi_sim.traineddata`，然后运行 `python build_windows.py`。
 
