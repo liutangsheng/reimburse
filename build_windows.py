@@ -13,6 +13,11 @@ APP_DIR = DIST_DIR / APP_NAME
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     tess_exe = VENDOR_TESS / "tesseract.exe"
     tessdata_dir = VENDOR_TESS / "tessdata"
     required_files = [
