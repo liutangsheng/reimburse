@@ -14,6 +14,10 @@
 3. 浏览器会自动打开操作页面，点击「选择文件夹」选中报销材料目录，点击「开始生成报销单 PDF」即可。
 4. 使用完毕后，直接关闭终端窗口（或退出应用）即可结束。
 
+### 界面预览
+
+![费用报销单自动生成工具界面](imag/7319bd16-5b34-4745-b19d-db2583f0db62.png)
+
 > 如需自行重新打包 Windows 绿色版，请确保 `vendor/tesseract/` 下包含 `tesseract.exe`、`*.dll` 及 `tessdata/eng.traineddata`、`tessdata/chi_sim.traineddata`，然后运行 `python build_windows.py`。
 
 ---

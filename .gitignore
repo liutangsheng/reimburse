@@ -21,6 +21,8 @@ reimburse_pack/
 *.jpeg
 *.png
 *.webp
+!imag/
+!imag/**
 
 # 系统与编辑器文件
 .DS_Store
