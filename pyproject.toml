@@ -22,4 +22,5 @@ reimburse = "main:main"
 reimburse-ui = "web_ui:main"
 
 [tool.setuptools]
-py-modules = ["main", "web_ui"]
+packages = ["reimburse"]
+py-modules = ["app", "main", "web_ui"]

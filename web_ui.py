@@ -357,8 +357,8 @@ class ReimburseHandler(BaseHTTPRequestHandler):
             target_dir = Path(payload.get("dir", "")).expanduser()
             dept = payload.get("dept", "Bida")
             want_docx = bool(payload.get("docx", False))
-            output_pdf = target_dir.parent / f"{target_dir.name}_生成.pdf"
-            output_docx = (target_dir.parent / f"{target_dir.name}_生成.docx") if want_docx else None
+            output_pdf = target_dir.parent / f"{target_dir.name}.pdf"
+            output_docx = (target_dir.parent / f"{target_dir.name}.docx") if want_docx else None
             buf = io.StringIO()
             try:
                 with contextlib.redirect_stdout(buf):
